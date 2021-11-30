@@ -25,7 +25,6 @@ struct Packet{
     char payload[60];
 };
 
-constexpr size_t MAX_PAYLOAD_SIZE=0x10;
 const string tcp_data= "HTTP/1.0 302 Redirect\r\nLocation: http://warning.or.kr\r\n";
 string pattern;
 
@@ -37,35 +36,6 @@ void dump(unsigned char* buf, int size) {
         printf("%02X ", buf[i]);
     }
     printf("\n");
-}
-void print_ether_mac(const struct libnet_ethernet_hdr* ethernet_header){
-        printf("Ethernet - src mac: %s\n",ether_ntoa((ether_addr*)ethernet_header->ether_shost));
-    printf("Ethernet - dst mac: %s\n",ether_ntoa((ether_addr*)ethernet_header->ether_dhost));
-    return;
-}
-void print_ip(const struct libnet_ipv4_hdr* ipv4_header){
-        struct in_addr src=ipv4_header->ip_src;
-        struct in_addr dst=ipv4_header->ip_dst;
-        printf("IP - src ip: %s\n", inet_ntoa(src));
-        printf("IP - dst ip: %s\n", inet_ntoa(dst));
-    return;
-}
-void print_port(const struct libnet_tcp_hdr* tcp_header){
-        u_int16_t src=tcp_header->th_sport;
-        u_int16_t dst=tcp_header->th_dport;
-        printf("TCP - src port: %u\n",ntohs(src));
-    printf("TCP - dst port: %u\n",ntohs(dst));
-    return;
-}
-void print_payload(const u_char* payload,size_t payload_size){
-        size_t print_size=payload_size<MAX_PAYLOAD_SIZE?payload_size:MAX_PAYLOAD_SIZE;
-        printf("Payload (%zu byte(s)): ",payload_size);
-        for(size_t i=0;i<print_size;i++){
-            printf("%02x ",payload[i]);
-        }
-        if(payload_size>print_size)printf("...");
-        printf("\n");
-    return;
 }
 
 vector<int> getpi(string p){
@@ -108,7 +78,6 @@ Mac get_mymac(const char* dev){
     int sock = socket(AF_INET,SOCK_DGRAM,IPPROTO_IP);
     if(sock==-1){
         cerr << "mac socket open error\n";
-        //fprintf(stderr,"mac socket open error\n");
         close(sock);
         exit(1);
     }
@@ -116,7 +85,6 @@ Mac get_mymac(const char* dev){
     strncpy(ifr.ifr_name,dev,IFNAMSIZ);
     if(ioctl(sock,SIOCGIFHWADDR,&ifr)!=0){
         cerr << "mac ioctl error\n";
-        //fprintf(stderr,"mac ioctl error\n");
         close(sock);
         exit(1);
     }
@@ -134,27 +102,20 @@ size_t packet_data_len(Packet* packet){
 bool check_packet(Packet *packet){
     if(packet->eth_.type()!=EthHdr::Ip4)return false;
     if(packet->ip_.ip_p!=IPPROTO_TCP)return false;
-    //if(!kmp(packet->payload,pattern))return false;
-    //u_int32_t hlen=(u_int32_t)(ntohs(packet->ip_.ip_hl)*4+ntohs(packet->tcp_.th_off)*4);
     string payload=string((char*)&packet->ip_,ntohs(packet->ip_.ip_len));
-    //cout<<"y\n";
-    //cout<<payload.size()<<"size\n";
     if(!kmp(payload,pattern))return false;
-
     return true;
 }
 
 
 
 u_int16_t ip_checksum(IpHdr* header){
-    //dump((u_char*)header,20);
     u_int32_t sum=0;
     u_int16_t imsi=header->ip_sum;
     u_short header_len=sizeof(IpHdr)>>1;
     header->ip_sum=0;
     u_int16_t* pseudo_header=(u_int16_t*)header;
 
-    //cout<<header_len<<"whatthefuck\n";
     for(u_short i=0;i<header_len;i++){
         sum+=u_int32_t(ntohs(*pseudo_header++));
     }
@@ -165,10 +126,6 @@ u_int16_t ip_checksum(IpHdr* header){
 }
 
 u_int16_t tcp_checksum(IpHdr *ip, TcpHdr *tcp){
-    /*cout<<"ip:\n";
-    dump((u_char*)ip,20);
-    cout<<"tcp:\n";
-    dump((u_char*)tcp,100);*/
     u_int32_t sum=0;
     u_int16_t imsi=tcp->th_sum;
     tcp->th_sum=0;
@@ -192,10 +149,8 @@ u_int16_t tcp_checksum(IpHdr *ip, TcpHdr *tcp){
 
     //tcp checksum
     data_len>>=1;
-    //cout<<data_len<<"len\n";
     u_int16_t* pseudo_header=(u_int16_t*)tcp;
     for(u_int32_t i=0;i<data_len;i++){
-        //cout<<hex<<u_int32_t(ntohs(*pseudo_header))<<" ";
         sum+=(u_int32_t)(ntohs((*pseudo_header++)));
     }
     if(data_len%2){
@@ -214,9 +169,7 @@ int send_packet_forward(pcap_t* pcap, Packet* captured_packet, Mac mymac){
     redirect_packet->eth_=captured_packet->eth_;
     redirect_packet->ip_=captured_packet->ip_;
     redirect_packet->tcp_=captured_packet->tcp_;
-    //redirect_packet->payload.clear();
 
-    //cout<<packet_data_len(captured_packet)<<"asdf\n";
     //eth
     redirect_packet->eth_.smac_=mymac;
 
@@ -228,13 +181,10 @@ int send_packet_forward(pcap_t* pcap, Packet* captured_packet, Mac mymac){
     redirect_packet->tcp_.th_off=sizeof(TcpHdr)>>2;
     redirect_packet->tcp_.th_flags=TH_RST|TH_ACK;
 
-
-    //dump((u_char*)redirect_packet,108);
     //checksum
     redirect_packet->ip_.ip_sum=htons(ip_checksum(&redirect_packet->ip_));
 
     redirect_packet->tcp_.th_sum=htons(tcp_checksum(&redirect_packet->ip_,&redirect_packet->tcp_));
-    //cout<<hex<<redirect_packet->tcp_.th_sum<<"checksum\n";
     int res=pcap_sendpacket(pcap,(u_char*)redirect_packet,sizeof(EthHdr)+ntohs(redirect_packet->ip_.ip_len));
     if(res!=0){
         cerr << "pcap_sendpacket return " << res << " error=" << pcap_geterr(pcap) << "\n";
@@ -252,8 +202,6 @@ int send_packet_backward(pcap_t* pcap, Packet* captured_packet, Mac mymac, strin
     redirect_packet->eth_=captured_packet->eth_;
     redirect_packet->ip_=captured_packet->ip_;
     redirect_packet->tcp_=captured_packet->tcp_;
-    //printf("packet-%p, ip-%p, tcp-%p, payload-%p ",redirect_packet,&redirect_packet->ip_,&redirect_packet->tcp_,&redirect_packet->payload);
-    //redirect_packet->payload.clear();
 
     //eth
     redirect_packet->eth_.smac_=mymac;
@@ -274,16 +222,11 @@ int send_packet_backward(pcap_t* pcap, Packet* captured_packet, Mac mymac, strin
     //data
     for(int i=0;i<(int)data.size();i++)redirect_packet->payload[i]=data[i];
     redirect_packet->payload[data.size()]='\0';
-    //memcpy((u_char*)(&redirect_packet->payload),data.c_str(),data.size());
-
-    //dump((u_char*)(redirect_packet),150);
-    //cout<<redirect_packet->payload<<"\nsize: "<<redirect_packet->payload.size()<<"\n";
 
     //checksum
     redirect_packet->ip_.ip_sum=htons(ip_checksum(&redirect_packet->ip_));
     redirect_packet->tcp_.th_sum=htons(tcp_checksum(&redirect_packet->ip_,&redirect_packet->tcp_));
 
-    //cout<<hex<<redirect_packet->tcp_.th_sum<<"checksum\n";
     int res=pcap_sendpacket(pcap,(u_char*)redirect_packet,sizeof(EthHdr)+ntohs(redirect_packet->ip_.ip_len));
     if(res!=0){
         cerr << "pcap_sendpacket return " << res << " error=" << pcap_geterr(pcap) << "\n";
@@ -319,7 +262,6 @@ int main(int argc, char* argv[]) {
     }
 
     Mac mac=get_mymac(dev);
-    //cout<<string(mac)<<"\n";
     while (true) {
         struct pcap_pkthdr* header;
         const u_char* packet;
@@ -329,46 +271,13 @@ int main(int argc, char* argv[]) {
             printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(pcap));
             break;
         }
-        //printf("%u bytes captured\n", header->caplen);
 
         Packet* captured_packet=(Packet*)packet;
-        //cout<<"x\n";
         if(check_packet(captured_packet)){
             cout<<"pattern captured\n";
             send_packet_forward(pcap,captured_packet,mac);
-            //cout<<"forward clear\n";
             send_packet_backward(pcap,captured_packet,mac,tcp_data);
         }
-        //cout<<"after\n";
-            /*struct libnet_ethernet_hdr* ethernet_header=(libnet_ethernet_hdr*)packet;
-            if(ntohs(ethernet_header->ether_type)!=ETHERTYPE_IP){
-                    //not an ip protocol
-                    printf("Not an ip protocol!\n");
-                    printf("---------------------------------\n\n");
-                    continue;
-            }
-
-            struct libnet_ipv4_hdr* ipv4_header=(libnet_ipv4_hdr*)(ethernet_header+1);
-            if(ipv4_header->ip_p!=IPPROTO_TCP){
-                    //not a tcp protocol
-                    printf("Not a tcp protocol!\n");
-                    printf("---------------------------------\n\n");
-                    continue;
-            }
-
-            struct libnet_tcp_hdr* tcp_header=(libnet_tcp_hdr*)(ipv4_header+1);
-
-            const u_int8_t tcp_header_size=(tcp_header->th_off)*4;
-            size_t header_size=sizeof(libnet_ethernet_hdr)+sizeof(libnet_ipv4_hdr)+(size_t)tcp_header_size;
-
-            const u_char* payload=(u_char*)(tcp_header)+tcp_header_size;
-
-            print_ether_mac(ethernet_header);
-            print_ip(ipv4_header);
-            print_port(tcp_header);
-            print_payload(payload,(size_t)header->caplen-header_size);
-            printf("---------------------------------\n\n");*/
     }
-
     pcap_close(pcap);
 }
